@@ -30,7 +30,7 @@ An advanced IoT and computer vision project that combines embedded hardware peri
 ---
 
 ### 🎥 Project Demo Video
-[![Watch Rover Video](https://img.shields.io/badge/Click%20To%20View-Project%20Demo%20Video-blue?style=for-the-badge&logo=microsoftonedrive)](https://1drv.ms/i/c/BFC31027103C6E71/IQCAq6GuGwpAQ7bUg4nbkbDSAZQpB_DGV_qNiKtHCNqhKpA?e=DrxDbX)
+[![Watch Rover Video](https://img.shields.io/badge/Click%20To%20View-Project%20Demo%20Video-blue?style=for-the-badge&logo=googledrive)](https://drive.google.com/file/d/1gndmQi56EwBHN09vALXRiSVdgzpbrviH/view?usp=drivesdk)
 
 ## 📐 Circuit Diagram & Connections
 Refer to the documentation and circuit schematics included in the repository for detailed pin configurations between the ESP32, ESP32-CAM, and L298N motor driver.
