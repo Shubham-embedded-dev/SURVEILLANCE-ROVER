@@ -28,6 +28,14 @@ An advanced IoT and computer vision project that combines embedded hardware peri
 | :--- | :--- |
 | ![Rover Hardware](rover%20image.jpeg) | ![OpenCV Tracking](camera%20feed.png) |
 ---
+
+### 🎥 Project Demo Video
+
+<video width="100%" controls>
+  <source src="rover%20video.mp4" type="video/mp4">
+  Your browser does not support the video tag.
+</video>
+
 ## 📐 Circuit Diagram & Connections
 Refer to the documentation and circuit schematics included in the repository for detailed pin configurations between the ESP32, ESP32-CAM, and L298N motor driver.
 ---
