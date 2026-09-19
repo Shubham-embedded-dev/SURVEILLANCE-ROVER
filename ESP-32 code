@@ -1,0 +1,144 @@
+#include <WiFi.h>
+
+// wifi-details
+const char* ssid = "shubham";
+const char* password = "11111111"; 
+
+WiFiServer server(80);
+
+// Motor Driver (L298N) Pins Configuration
+const int ENA = 23; // Speed control pin (PWM)
+const int IN1 = 22; // Motor A Forward
+const int IN2 = 21; // Motor A Backward
+const int IN3 = 19; // Motor B Forward
+const int IN4 = 18; // Motor B Backward
+
+void setup() {
+  Serial.begin(115200);
+
+  // Motor pins ko output configure karein
+  pinMode(ENA, OUTPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+
+  // Default speed set
+  analogWrite(ENA, 200);
+
+  // Wi-Fi Access Point Start
+  Serial.println("Setting up Access Point...");
+  WiFi.softAP(ssid, password);
+  
+  IPAddress myIP = WiFi.softAPIP();
+  Serial.print("AP IP address: ");
+  Serial.println(myIP);
+
+  server.begin();
+  Serial.println("Server started");
+}
+
+void loop() {
+  WiFiClient client = server.available();   // Listen for incoming clients
+
+  if (client) {                             
+    Serial.println("New Client Connected.");
+    String currentLine = "";                
+    while (client.connected()) {            
+      if (client.available()) {             
+        char c = client.read();             
+        Serial.write(c);                    
+        if (c == '\n') {                    
+          if (currentLine.length() == 0) {
+            // HTTP headers ke baad HTML page bhejna hai
+            client.println("HTTP/1.1 200 OK");
+            client.println("Content-type:text/html");
+            client.println();
+            
+            // Web Control Dashboard UI
+            client.println("<!DOCTYPE html><html>");
+            client.println("<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
+            client.println("<style>");
+            client.println("body { text-align: center; font-family: Arial; background: #222; color: white; margin-top: 50px;}");
+            client.println(".btn { background-color: #008CBA; color: white; padding: 15px 32px; font-size: 20px; margin: 8px; cursor: pointer; border-radius: 10px; border: none; width: 150px;}");
+            client.println(".stop { background-color: #f44336; }");
+            client.println("</style></head>");
+            client.println("<body>");
+            client.println("<h1>ESP32 Rover Control Panel</h1>");
+            client.println("<p><a href=\"/forward\"><button class=\"btn\">FORWARD</button></a></p>");
+            client.println("<p><a href=\"/left\"><button class=\"btn\">LEFT</button></a> <a href=\"/stop\"><button class=\"btn stop\">STOP</button></a> <a href=\"/right\"><button class=\"btn\">RIGHT</button></a></p>");
+            client.println("<p><a href=\"/backward\"><button class=\"btn\">BACKWARD</button></a></p>");
+            client.println("</body></html>");
+            
+            client.println();
+            break;
+          } else {
+            currentLine = "";
+          }
+        } else if (c != '\r') {
+          currentLine += c;
+        }
+
+        // URL requests check karke motors control karna
+        if (currentLine.endsWith("GET /forward")) {
+          moveForward();
+        }
+        if (currentLine.endsWith("GET /backward")) {
+          moveBackward();
+        }
+        if (currentLine.endsWith("GET /left")) {
+          turnLeft();
+        }
+        if (currentLine.endsWith("GET /right")) {
+          turnRight();
+        }
+        if (currentLine.endsWith("GET /stop")) {
+          stopMotors();
+        }
+      }
+    }
+    client.stop();
+    Serial.println("Client Disconnected.");
+  }
+}
+
+// Movement Functions
+void moveForward() {
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, HIGH);
+  digitalWrite(IN4, LOW);
+  Serial.println("Moving Forward");
+}
+
+void moveBackward() {
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, HIGH);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, HIGH);
+  Serial.println("Moving Backward");
+}
+
+void turnLeft() {
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, HIGH);
+  digitalWrite(IN3, HIGH);
+  digitalWrite(IN4, LOW);
+  Serial.println("Turning Left");
+}
+
+void turnRight() {
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, HIGH);
+  Serial.println("Turning Right");
+}
+
+void stopMotors() {
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, LOW);
+  Serial.println("Motors Stopped");
+}
