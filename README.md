@@ -26,8 +26,7 @@ An advanced IoT and computer vision project that combines embedded hardware peri
 
 | Rover Hardware Assembly | OpenCV Real-Time Human Tracking & Zoom |
 | :--- | :--- |
-| ![Rover Hardware](39080.jpg) | ![OpenCV Tracking](40272.jpg) |
-
+| ![Rover Hardware](rover%20image.jpeg) | ![OpenCV Tracking](camera%20feed.png) |
 ---
 ## 📐 Circuit Diagram & Connections
 Refer to the documentation and circuit schematics included in the repository for detailed pin configurations between the ESP32, ESP32-CAM, and L298N motor driver.
