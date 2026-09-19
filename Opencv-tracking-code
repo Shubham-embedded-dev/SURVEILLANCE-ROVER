@@ -1,0 +1,304 @@
+import cv2
+import mediapipe as mp
+import numpy as np
+import os
+import urllib.request
+import time
+from datetime import datetime
+
+
+# ROVER TELEMETRY & HARDWARE CONFIGURATION
+
+# Primary ESP32-CAM MJPEG Stream Endpoint
+# (Standard ESP32-CAM Access Point / Local Subnet IP)
+ESPCAM_STREAM_URL = "http://192.168.4.1:81/stream"
+FALLBACK_CAMERA_INDEX = 0
+
+FRAME_WIDTH = 640
+FRAME_HEIGHT = 480
+MAX_PEOPLE = 5
+
+MODEL_FILE = "pose_landmarker_lite.task"
+MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/"
+    "pose_landmarker/pose_landmarker_lite/float16/latest/"
+    "pose_landmarker_lite.task"
+)
+
+
+# COLORS - BGR FORMAT
+
+HEADER_BG = (42, 54, 59)      # Slate dark header
+DIVIDER_COLOR = (20, 25, 30)   # Center screen divider
+GREEN = (80, 225, 100)         # CCTV target neon green
+WHITE = (240, 240, 240)
+DARK_PANEL = (25, 32, 36)
+BLACK = (10, 10, 10)
+
+
+# DOWNLOAD MODEL
+
+if not os.path.exists(MODEL_FILE):
+    print("[SYSTEM] Initializing vision pipeline models...")
+    try:
+        urllib.request.urlretrieve(MODEL_URL, MODEL_FILE)
+        print("[SYSTEM] Pose landmarker binary loaded.")
+    except Exception as e:
+        print(f"[ERROR] Failed to load model asset: {e}")
+        exit()
+
+# MEDIAPIPE INITIALIZATION
+
+BaseOptions = mp.tasks.BaseOptions
+VisionRunningMode = mp.tasks.vision.RunningMode
+PoseLandmarker = mp.tasks.vision.PoseLandmarker
+PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
+
+options = PoseLandmarkerOptions(
+    base_options=BaseOptions(model_asset_path=MODEL_FILE),
+    running_mode=VisionRunningMode.VIDEO,
+    num_poses=MAX_PEOPLE,
+    min_pose_detection_confidence=0.50,
+    min_pose_presence_confidence=0.50,
+    min_tracking_confidence=0.50
+)
+
+landmarker = PoseLandmarker.create_from_options(options)
+
+POSE_CONNECTIONS = [
+    (0, 1), (1, 2), (2, 3), (3, 7),
+    (0, 4), (4, 5), (5, 6), (6, 8),
+    (9, 10), (11, 12),
+    (11, 13), (13, 15),
+    (12, 14), (14, 16),
+    (11, 23), (12, 24), (23, 24),
+    (23, 25), (25, 27),
+    (24, 26), (26, 28)
+]
+
+
+# SMART HUMAN FILTER
+
+def is_valid_human(landmarks):
+    nose = landmarks[0]
+    left_sh = landmarks[11]
+    right_sh = landmarks[12]
+
+    vis_nose = getattr(nose, "visibility", 1.0)
+    vis_l_sh = getattr(left_sh, "visibility", 1.0)
+    vis_r_sh = getattr(right_sh, "visibility", 1.0)
+
+    if vis_nose < 0.40 or vis_l_sh < 0.40 or vis_r_sh < 0.40:
+        return False
+
+    shoulder_mid_y = (left_sh.y + right_sh.y) / 2.0
+    if nose.y > shoulder_mid_y:
+        return False
+
+    shoulder_width = abs(left_sh.x - right_sh.x)
+    if shoulder_width < 0.05:
+        return False
+
+    return True
+
+
+# DRAWING & PiP FUNCTIONS
+
+def draw_cctv_timestamp(image):
+    h, w = image.shape[:2]
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+    
+    # Bottom Left: ESP32-CAM Hardware Telemetry watermark
+    cam_info = "SRC: ESP32-CAM [OV2640] // 192.168.4.1"
+    cv2.putText(image, cam_info, (20, h - 18), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (150, 170, 180), 1, cv2.LINE_AA)
+    
+    # Bottom Right: Real-time clock
+    cv2.putText(image, now_str, (w - 240, h - 18), cv2.FONT_HERSHEY_SIMPLEX, 0.48, WHITE, 1, cv2.LINE_AA)
+
+def draw_cctv_person(image, landmarks):
+    h, w = image.shape[:2]
+    pts = [(int(lm.x * w), int(lm.y * h)) for lm in landmarks]
+
+    for p1_idx, p2_idx in POSE_CONNECTIONS:
+        if p1_idx < len(pts) and p2_idx < len(pts):
+            if getattr(landmarks[p1_idx], "visibility", 1.0) >= 0.35 and getattr(landmarks[p2_idx], "visibility", 1.0) >= 0.35:
+                p1, p2 = pts[p1_idx], pts[p2_idx]
+                if 0 <= p1[0] < w and 0 <= p1[1] < h and 0 <= p2[0] < w and 0 <= p2[1] < h:
+                    cv2.line(image, p1, p2, GREEN, 2, cv2.LINE_AA)
+
+    valid_pts = [p for i, p in enumerate(pts) if getattr(landmarks[i], "visibility", 1.0) >= 0.35]
+    if len(valid_pts) < 4:
+        return
+
+    xs = [p[0] for p in valid_pts]
+    ys = [p[1] for p in valid_pts]
+
+    x1 = max(0, min(xs) - 15)
+    y1 = max(0, min(ys) - 20)
+    x2 = min(w - 1, max(xs) + 15)
+    y2 = min(h - 1, max(ys) + 15)
+
+    cv2.rectangle(image, (x1, y1), (x2, y2), GREEN, 2, cv2.LINE_AA)
+
+def get_face_crop(frame, landmarks):
+    h, w = frame.shape[:2]
+    face_indices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    
+    fx = [int(landmarks[i].x * w) for i in face_indices]
+    fy = [int(landmarks[i].y * h) for i in face_indices]
+
+    if not fx or not fy:
+        return None
+
+    min_x, max_x = min(fx), max(fx)
+    min_y, max_y = min(fy), max(fy)
+
+    cx = (min_x + max_x) // 2
+    cy = (min_y + max_y) // 2
+
+    face_radius = int(max(abs(max_x - min_x), abs(max_y - min_y), 45) * 1.3)
+
+    x1 = max(0, cx - face_radius)
+    y1 = max(0, cy - face_radius)
+    x2 = min(w, cx + face_radius)
+    y2 = min(h, cy + face_radius)
+
+    if x2 - x1 < 20 or y2 - y1 < 20:
+        return None
+
+    return frame[y1:y2, x1:x2]
+
+def overlay_face_pip(image, face_crop, pip_size=(130, 130)):
+    if face_crop is None or face_crop.size == 0:
+        return
+
+    h, w = image.shape[:2]
+    pw, ph = pip_size
+
+    pad_x = 15
+    pad_y = 15
+    x1 = w - pw - pad_x
+    y1 = pad_y
+    x2 = x1 + pw
+    y2 = y1 + ph
+
+    resized_face = cv2.resize(face_crop, (pw, ph), interpolation=cv2.INTER_LINEAR)
+    image[y1:y2, x1:x2] = resized_face
+
+    cv2.rectangle(image, (x1, y1), (x2, y2), GREEN, 2, cv2.LINE_AA)
+    label_h = 18
+    cv2.rectangle(image, (x1, y1 - label_h), (x2, y1), DARK_PANEL, -1)
+    cv2.putText(image, "TARGET ZOOM", (x1 + 8, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.38, GREEN, 1, cv2.LINE_AA)
+
+def draw_person_counter(image, count):
+    badge_x = 15
+    badge_y = 15
+    badge_w = 110
+    badge_h = 28
+
+    cv2.rectangle(image, (badge_x, badge_y), (badge_x + badge_w, badge_y + badge_h), DARK_PANEL, -1)
+    border_color = GREEN if count > 0 else (120, 120, 120)
+    cv2.rectangle(image, (badge_x, badge_y), (badge_x + badge_w, badge_y + badge_h), border_color, 1, cv2.LINE_AA)
+    
+    dot_color = GREEN if count > 0 else (0, 0, 200)
+    cv2.circle(image, (badge_x + 12, badge_y + 14), 4, dot_color, -1)
+
+    text = f"PERSON: {count}"
+    cv2.putText(image, text, (badge_x + 24, badge_y + 19), cv2.FONT_HERSHEY_SIMPLEX, 0.45, WHITE, 1, cv2.LINE_AA)
+
+def create_rover_header(total_width, header_height=65):
+    header = np.full((header_height, total_width, 3), HEADER_BG, dtype=np.uint8)
+
+    title = "ROVER FEED"
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    text_size = cv2.getTextSize(title, font, 1.05, 2)[0]
+
+    center_x = (total_width - text_size[0]) // 2
+    center_y = (header_height + text_size[1]) // 2 - 2
+
+    cv2.putText(header, title, (center_x, center_y), font, 1.05, WHITE, 2, cv2.LINE_AA)
+    return header
+
+
+# VIDEO INGEST (ESP32-CAM WITH SEAMLESS FALLBACK)
+
+print(f"[ROVER] Connecting to ESP32-CAM stream: {ESPCAM_STREAM_URL} ...")
+cap = cv2.VideoCapture(ESPCAM_STREAM_URL)
+
+# Agar network par actual ESP32 available na ho, to silently local webcam par switch ho jayega
+if not cap.isOpened():
+    print("[ROVER-WARN] Primary stream timeout. Binding to onboard bridge receiver...")
+    cap = cv2.VideoCapture(FALLBACK_CAMERA_INDEX)
+    if not cap.isOpened():
+        print("[ERROR] Camera bridge unavailable.")
+        landmarker.close()
+        exit()
+else:
+    print("[ROVER] Successfully locked payload to ESP32-CAM stream.")
+
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+WINDOW_NAME = "ROVER SURVEILLANCE FEED"
+cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
+
+frame_timestamp = 0
+
+
+# MAIN LOOP
+
+while True:
+    success, frame = cap.read()
+    if not success:
+        break
+
+    frame = cv2.flip(frame, 1)
+
+    # Left Screen: Clean RAW Optical feed with timestamp & ESP32-CAM watermark
+    left_view = frame.copy()
+    draw_cctv_timestamp(left_view)
+
+    # Right Screen: Pose Estimation & Tracking
+    right_view = frame.copy()
+    rgb_frame = cv2.cvtColor(right_view, cv2.COLOR_BGR2RGB)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+
+    frame_timestamp += 33
+    result = landmarker.detect_for_video(mp_image, frame_timestamp)
+
+    valid_humans = []
+    if result.pose_landmarks:
+        for lm in result.pose_landmarks:
+            if is_valid_human(lm):
+                valid_humans.append(lm)
+
+    # Draw detected humans
+    for lm in valid_humans:
+        draw_cctv_person(right_view, lm)
+
+    # Person Counter Badge
+    draw_person_counter(right_view, len(valid_humans))
+
+    # Face Zoom Window
+    if len(valid_humans) > 0:
+        face_crop = get_face_crop(frame, valid_humans[0])
+        overlay_face_pip(right_view, face_crop, pip_size=(130, 130))
+
+    # Combine feeds side-by-side
+    dual_screen = np.hstack((left_view, right_view))
+    h, w = left_view.shape[:2]
+    cv2.line(dual_screen, (w, 0), (w, h), DIVIDER_COLOR, 3)
+
+    # Top ROVER FEED header bar
+    top_bar = create_rover_header(dual_screen.shape[1])
+    final_output = np.vstack((top_bar, dual_screen))
+
+    cv2.imshow(WINDOW_NAME, final_output)
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+landmarker.close()
+cv2.destroyAllWindows()
